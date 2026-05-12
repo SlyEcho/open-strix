@@ -1701,7 +1701,7 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
       }}
 
       function buildNotificationPreview(message) {{
-        const previewText = (message.content || "").replace(/\s+/g, " ").trim();
+        const previewText = (message.content || "").replace(/\\s+/g, " ").trim();
         if (previewText) {{
           return previewText.length > 100 ? previewText.slice(0, 97) + "..." : previewText;
         }}
