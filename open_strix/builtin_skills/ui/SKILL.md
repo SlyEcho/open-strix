@@ -10,7 +10,7 @@ There are **three** surfaces in the local web UI. Pick by asking *what shape the
 | Surface | When | What it gives you | What it costs |
 | --- | --- | --- | --- |
 | **Markdown message** | Quick reply, single point, conversational. | Cheap, scrollable with the chat. | Linear — every reply pushes older ones up. |
-| **HTML message** | One-off rich artifact: a table, a status card, a small dashboard, a diagram, a labelled diff. The shape is non-linear but the lifetime is "until the next message scrolls it away." | Tables, grids, layered SVG, color/typography under your control. Renders inline in chat. | Static (no scripts), no live data. Cream background — see below. |
+| **HTML message** | One-off rich artifact: a table, a status card, a small dashboard, a diagram, a labelled diff. The shape is non-linear but the lifetime is "until the next message scrolls it away." | Tables, grids, layered SVG, color/typography under your control. Renders inline in chat. Can use parent-owned `data-strix-action` hooks for links and forms. | No scripts, no live data. Cream background — see below. |
 | **UI plugin** | A *frame of mind* that is not linear like chat. Persistent. Tim wants to see what we're talking about, not just discuss it. Example: chainlink issues — the chat thread talks *about* them, the plugin *shows* them, with detail views, filters, status. | A live, interactive, scrollable side panel that survives across turns. Full JS, can poll, can show fresh state. | Costs a server. Has a contract: see `ui-plugins.md`. |
 
 **Mental model (from Tim, 2026-05-12):**
@@ -48,7 +48,11 @@ Two safe strategies:
 
 ## No scripts
 
-The iframe sandbox is `allow-same-origin` only — **no `allow-scripts`**. Anything that needs JS won't run. Use static HTML, CSS, and inline SVG. If you need interactivity, you need a UI plugin.
+The iframe sandbox is `allow-same-origin` only — **no `allow-scripts`**. Anything that needs JS won't run. Use static HTML, CSS, and inline SVG.
+
+For parent-owned interactions, use the HTML action API in `html-actions.md`. It lets static HTML links, buttons, and forms ask the parent app to do controlled things like navigate a widget or send a chat message.
+
+If you need arbitrary client-side state, polling, live updates, or custom JS behavior, build a UI plugin.
 
 ## Sizing
 
@@ -60,12 +64,14 @@ The harness auto-resizes the iframe height to fit content via `ResizeObserver`. 
 
 When a UI plugin is running, you can link to its internal routes from chat. Clicking the link **navigates the plugin's widget**, instead of opening a new tab. This is the bridge between chat (the conversation) and the plugin (the frame of mind).
 
+For explicit buttons/forms and the JavaScript `postMessage` bridge, read `html-actions.md`. Plain links remain the simplest option when all you need is widget navigation.
+
 ## URL shapes
 
 | From | href format | Mechanism |
 | --- | --- | --- |
 | Markdown message | `/ui/<plugin>/<path>` | Delegated click handler on the chat container. Parent intercepts and sets the plugin iframe's `src`. |
-| HTML message (sandboxed, no scripts) | Either `/ui/<plugin>/<path>` (intercepted via parent listener attached to the iframe's `contentDocument`), **or** `#/ui/<plugin>/<path>` with `target="_top"` (uses the parent's `hashchange` listener; works even if the click delegate isn't attached yet). | Click delegation on `iframe.contentDocument`, *or* `window.hashchange`. |
+| HTML message (sandboxed, no scripts) | Prefer `/ui/<plugin>/<path>`; the parent attaches a click listener to the iframe's `contentDocument` and routes it. Explicit buttons can use `data-strix-action="widget.navigate"`. `#/ui/<plugin>/<path>` with `target="_top"` is a legacy compatibility escape hatch only. | Parent-owned click delegation on `iframe.contentDocument`; optional hash routing. |
 
 `<plugin>` must match the `name` field in the plugin's `ui.json`. `<path>` is whatever route the plugin's own server serves.
 
@@ -77,8 +83,10 @@ See [chainlink #567](/ui/chainlink/issue/567) for the detail.
 
 ```html
 <a href="/ui/chainlink/issue/567">chainlink #567</a>
-<!-- or, equivalently, the hash form for maximum portability: -->
+<!-- legacy compatibility form; prefer the direct /ui/... href above: -->
 <a href="#/ui/chainlink/issue/567" target="_top">chainlink #567 (hash)</a>
+<!-- explicit action form, useful for buttons or plugin-local paths: -->
+<button type="button" data-strix-action="widget.navigate" data-strix-widget="chainlink" data-strix-path="/issue/567">chainlink #567</button>
 ```
 
 When the link is clicked:
@@ -98,4 +106,5 @@ This is the highest-leverage move enabled by the plugin system. Use it often.
 # Cross-references
 
 - `ui-plugins.md` — how to design, ship, and reason about UI plugins themselves (the plugin contract, lifecycle, port assignment, `ui.json` schema, security model).
+- `html-actions.md` — the parent-owned HTML action API and the equivalent `postMessage` bridge for trusted scripted frames.
 - `memory` skill — for deciding what state belongs in a plugin's data store vs. a memory block vs. a state file.

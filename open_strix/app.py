@@ -575,10 +575,10 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
             for skill_name, virtual_path in rows:
                 print(f"[open-strix]   {skill_name} -> {virtual_path}", flush=True)
 
-    def log_event(self, event_type: str, **payload: Any) -> None:
+    def log_event(self, record_type: str, **payload: Any) -> None:
         record = {
             "timestamp": utc_now_iso(),
-            "type": event_type,
+            "type": record_type,
             "session_id": self.session_id,
             **payload,
         }

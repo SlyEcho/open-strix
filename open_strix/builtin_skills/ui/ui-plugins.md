@@ -139,10 +139,12 @@ External links (GitHub, docs, anything outside your plugin) use full `https://..
 
 This is the killer feature. The agent can write a link in a chat message that navigates the *plugin widget* rather than opening a new tab. See `SKILL.md` for the user-facing rules. From the plugin server's perspective:
 
-- A click on a link `/ui/<name>/<path>` (markdown) or `#/ui/<name>/<path>` (HTML message hash form) → the harness sets your iframe's `src` to `<path>` → your server receives a normal `GET <path>` → render that route.
+- A click on a link `/ui/<name>/<path>` from markdown or HTML → the harness sets your iframe's `src` to `<path>` → your server receives a normal `GET <path>` → render that route. The older `#/ui/<name>/<path>` hash form is only a compatibility escape hatch.
 - Make sure **every deep-link route handles direct navigation**, not just clicks-from-the-default-view. If a user lands on `/issue/567` cold, your server must render the detail page without depending on prior state.
 
 The chainlink plugin does this correctly: `/issue/<id>` is a top-level GET route that hits the SQLite DB and renders.
+
+For richer handoffs, read `html-actions.md`. The same verbs are available to plugins via `window.parent.postMessage`, so a plugin can ask the parent app to navigate another widget or send a chat message without reaching into parent DOM internals.
 
 ---
 
@@ -189,5 +191,5 @@ It pairs with chat links like `/ui/chainlink/issue/567`, which open the issue de
 # Where to read code
 
 - `open_strix/ui_plugins.py` — discovery, port assignment, lifecycle, supervision.
-- `open_strix/web_ui.py`, search for `renderUiPlugins`, `createUiWidget`, `ensureUiIframe`, `applyUiWidgetState`, `routeUiPluginNav`, `attachUiPluginLinkInterceptor` — the client side.
+- `open_strix/web_ui.py`, search for `renderUiPlugins`, `createUiWidget`, `ensureUiIframe`, `applyUiWidgetState`, `routeUiPluginNav`, `attachStrixHtmlActions` — the client side.
 - `optional-skills/example-ui-plugin/` — a minimal plugin you can copy as a starting point.

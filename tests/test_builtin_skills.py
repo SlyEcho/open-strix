@@ -309,14 +309,17 @@ def test_bootstrap_cleans_legacy_builtin_script_copies(tmp_path: Path) -> None:
 
 
 def test_materialized_builtin_skills_include_ui_skill() -> None:
-    """The `ui` skill ships SKILL.md (markdown vs HTML vs plugin guidance,
-    link-nav protocol) and ui-plugins.md (the plugin contract)."""
+    """The `ui` skill ships SKILL.md (markdown vs HTML vs plugin guidance),
+    html-actions.md (parent-owned HTML/JS bridge), and ui-plugins.md (the
+    plugin contract)."""
     root = materialize_builtin_skills()
 
     skill_path = root / "ui" / "SKILL.md"
+    actions_path = root / "ui" / "html-actions.md"
     plugins_path = root / "ui" / "ui-plugins.md"
 
     assert skill_path.exists()
+    assert actions_path.exists()
     assert plugins_path.exists()
 
     skill_text = skill_path.read_text(encoding="utf-8")
@@ -328,11 +331,20 @@ def test_materialized_builtin_skills_include_ui_skill() -> None:
     assert "/ui/<plugin>/<path>" in skill_text
     assert "#/ui/<plugin>/<path>" in skill_text
     assert 'target="_top"' in skill_text
+    assert "html-actions.md" in skill_text
+    assert "data-strix-action" in skill_text
+
+    actions_text = actions_path.read_text(encoding="utf-8")
+    assert 'data-strix-action="widget.navigate"' in actions_text
+    assert 'data-strix-action="chat.send"' in actions_text
+    assert "window.parent.postMessage" in actions_text
+    assert 'strix: "v1"' in actions_text
 
     plugins_text = plugins_path.read_text(encoding="utf-8")
     # Plugin contract essentials.
     assert "ui.json" in plugins_text
     assert "OPEN_STRIX_PORT" in plugins_text
+    assert "html-actions.md" in plugins_text
     assert "STATE_DIR" in plugins_text
     assert "UI_NAME" in plugins_text
     assert "/ui/<name>/" in plugins_text

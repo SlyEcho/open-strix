@@ -578,22 +578,34 @@ async def test_health_includes_turn_state(tmp_path: Path) -> None:
 
 
 def test_render_page_includes_ui_plugin_link_navigation(tmp_path: Path) -> None:
-    """Markdown click delegation, HTML iframe interception, and hash routing
-    must all be wired up in the rendered page. This is the regression guard
-    for the link-to-plugin nav feature (2026-05-12)."""
+    """Markdown click delegation, HTML iframe actions, JS bridge, and hash
+    routing must all be wired up in the rendered page. This is the regression
+    guard for the link-to-plugin nav feature (2026-05-12) plus the explicit
+    HTML action API."""
     strix = DummyStrix(tmp_path / "atlas")
     html = _render_web_ui_page(strix)
 
     # Core helpers exist.
     assert "function parseUiPluginHref(" in html
     assert "function routeUiPluginNav(" in html
-    assert "function attachUiPluginLinkInterceptor(" in html
+    assert "function attachStrixHtmlActions(" in html
+    assert "function runStrixAction(" in html
+    assert "function postWebChatMessage(" in html
 
     # Two attach paths: parent chat container, and inside HTML message iframes.
-    assert "attachUiPluginLinkInterceptor(messagesEl)" in html
-    assert "attachUiPluginLinkInterceptor(doc)" in html
+    assert "attachStrixHtmlActions(messagesEl)" in html
+    assert "attachStrixHtmlActions(doc)" in html
 
-    # Hash-routed deep links (the HTML-message escape that doesn't need scripts).
+    # Explicit HTML and JS action APIs.
+    assert "data-strix-action" in html
+    assert 'action === "widget.navigate"' in html
+    assert 'action === "chat.send"' in html
+    assert "clickedIsSubmitter" in html
+    assert 'root.addEventListener("keydown"' in html
+    assert 'window.addEventListener("message"' in html
+    assert 'payload.strix !== "v1"' in html
+
+    # Hash-routed deep links remain as a compatibility escape hatch.
     assert "hashchange" in html
     assert '"#/ui/"' in html
 

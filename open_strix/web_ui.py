@@ -1125,17 +1125,17 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
       let shellJobOutputState = new Map();
       let pastedFiles = [];
       let uiWidgets = new Map();
-      // Route /ui/<plugin>/ links from chat messages into the matching widget.
-      // The click handler closes over uiWidgets dynamically, so it sees
-      // plugins as they register.
+      // Route /ui/<plugin>/ links and explicit HTML actions from chat messages
+      // into the parent app. The handlers close over uiWidgets dynamically, so
+      // they see plugins as they register.
       window.addEventListener("DOMContentLoaded", () => {{
-        if (messagesEl) attachUiPluginLinkInterceptor(messagesEl);
+        if (messagesEl) attachStrixHtmlActions(messagesEl);
       }});
       if (document.readyState !== "loading" && messagesEl) {{
-        attachUiPluginLinkInterceptor(messagesEl);
+        attachStrixHtmlActions(messagesEl);
       }}
-      // Hash-routed deep links (works from sandboxed HTML iframes that use
-      // <a href="#/ui/<plugin>/..." target="_top">): listen on hashchange.
+      // Hash-routed deep links. This is a compatibility escape hatch; normal
+      // HTML messages use parent-owned click delegation on /ui/<plugin>/ links.
       window.addEventListener("hashchange", () => {{
         const h = window.location.hash;
         if (h && h.startsWith("#/ui/")) {{
@@ -1315,7 +1315,7 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         // Returns {{ name, path }} if href targets a UI plugin, else null.
         // Forms:
         //   /ui/<name>/<rest>          (markdown link inside chat DOM)
-        //   #/ui/<name>/<rest>         (hash-routed; usable from sandboxed HTML iframes)
+        //   #/ui/<name>/<rest>         (hash-routed compatibility form)
         //   http(s)://host/ui/<name>/<rest>
         //   http(s)://host/#/ui/<name>/<rest>
         if (!href) return null;
@@ -1380,18 +1380,180 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         return true;
       }}
 
-      function attachUiPluginLinkInterceptor(root) {{
-        // Delegated click handler for <a> elements whose href targets a
-        // /ui/<name>/ path. Works for both the parent chat DOM (markdown
-        // messages) and the contentDocument of sandboxed HTML message
-        // iframes (allow-same-origin lets us listen even without
-        // allow-scripts inside the iframe).
-        if (!root || root.__uiPluginLinkInterceptorAttached) return;
-        root.__uiPluginLinkInterceptorAttached = true;
+      function buildUiPluginActionHref(widgetName, path) {{
+        // HTML actions can provide either a normal /ui/<name>/ link or a
+        // plugin-local path. Normalize both into the canonical routed shape.
+        if (!widgetName) return String(path || "");
+        const parsed = parseUiPluginHref(path || "");
+        if (parsed && parsed.name === widgetName) return parsed.path;
+        let nextPath = String(path || "/");
+        if (!nextPath || nextPath === ".") {{
+          nextPath = "/";
+        }}
+        if (nextPath.startsWith("?") || nextPath.startsWith("#")) {{
+          nextPath = "/" + nextPath;
+        }} else if (!nextPath.startsWith("/")) {{
+          nextPath = "/" + nextPath;
+        }}
+        return "/ui/" + encodeURIComponent(widgetName) + nextPath;
+      }}
+
+      function isKnownStrixAction(action) {{
+        return action === "widget.navigate" || action === "chat.send";
+      }}
+
+      function firstStringFormValue(formData, names) {{
+        for (const name of names) {{
+          const value = formData.get(name);
+          if (typeof value === "string") return value;
+        }}
+        return "";
+      }}
+
+      function formDataFiles(formData) {{
+        const files = [];
+        formData.forEach((value) => {{
+          if (
+            value &&
+            typeof value === "object" &&
+            typeof value.name === "string" &&
+            typeof value.arrayBuffer === "function" &&
+            value.name
+          ) {{
+            files.push(value);
+          }}
+        }});
+        return files;
+      }}
+
+      function strixAttr(primary, fallback, name) {{
+        const attr = "data-strix-" + name;
+        return (
+          (primary && primary.getAttribute && primary.getAttribute(attr)) ||
+          (fallback && fallback.getAttribute && fallback.getAttribute(attr)) ||
+          ""
+        );
+      }}
+
+      function closestElement(target, selector) {{
+        if (!target) return null;
+        const element = target.closest ? target : target.parentElement;
+        return element && element.closest ? element.closest(selector) : null;
+      }}
+
+      function isSubmitButton(element) {{
+        if (!element || !element.form || !element.tagName) return false;
+        const tag = element.tagName.toLowerCase();
+        const type = element.type ? String(element.type).toLowerCase() : "";
+        return (tag === "button" || tag === "input") && (!type || type === "submit");
+      }}
+
+      function strixPayloadFromElement(element, form, submitter) {{
+        const source = submitter || element;
+        let formData = null;
+        if (form) {{
+          formData = new FormData(form);
+          if (submitter && submitter.name) {{
+            formData.set(submitter.name, submitter.value || "");
+          }}
+        }}
+        const href = strixAttr(source, element, "href") || (element.getAttribute && element.getAttribute("href")) || "";
+        const path = strixAttr(source, element, "path") || href;
+        const message =
+          strixAttr(source, element, "message") ||
+          (formData ? firstStringFormValue(formData, ["message", "text", "prompt"]) : "");
+        return {{
+          action: strixAttr(source, element, "action"),
+          widget: strixAttr(source, element, "widget"),
+          path,
+          href,
+          message,
+          files: formData ? formDataFiles(formData) : [],
+        }};
+      }}
+
+      async function postWebChatMessage(text, files = []) {{
+        const normalized = String(text ?? "").trim();
+        const uploadFiles = Array.from(files || []).filter(Boolean);
+        if (!normalized && uploadFiles.length === 0) return false;
+        void requestNotificationPermission();
+        const body = new FormData();
+        body.set("text", text);
+        uploadFiles.forEach((file) => body.append("files", file));
+        const response = await fetch("/api/messages", {{
+          method: "POST",
+          body,
+        }});
+        if (!response.ok) {{
+          const payload = await response.json().catch(() => ({{ error: response.statusText }}));
+          throw new Error(payload.error || "message send failed");
+        }}
+        isNearBottom = true;
+        await refresh();
+        return true;
+      }}
+
+      async function runStrixAction(payload) {{
+        const action = String(payload && payload.action || "");
+        if (action === "widget.navigate") {{
+          const widget = String(payload.widget || "");
+          const href = widget
+            ? buildUiPluginActionHref(widget, payload.path || payload.href || "/")
+            : String(payload.path || payload.href || "");
+          return routeUiPluginNav(href);
+        }}
+        if (action === "chat.send") {{
+          return await postWebChatMessage(payload.message || "", payload.files || []);
+        }}
+        return false;
+      }}
+
+      function dispatchStrixAction(payload) {{
+        runStrixAction(payload).catch((error) => {{
+          console.error("strix action failed:", error);
+          alert(error instanceof Error ? error.message : "Strix action failed");
+        }});
+      }}
+
+      function attachStrixHtmlActions(root) {{
+        // Delegated handlers for the parent chat DOM and sandboxed HTML
+        // message iframes. Plain /ui/<name>/ links still work, and explicit
+        // data-strix-action links/buttons/forms can ask the parent app to do
+        // controlled work without enabling scripts in HTML messages.
+        if (!root || root.__strixHtmlActionsAttached) return;
+        root.__strixHtmlActionsAttached = true;
         root.addEventListener("click", (event) => {{
           if (event.defaultPrevented || event.button !== 0) return;
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-          const anchor = event.target.closest && event.target.closest("a[href]");
+          const actionEl = closestElement(event.target, "[data-strix-action]");
+          const actionTag = actionEl && actionEl.tagName ? actionEl.tagName.toLowerCase() : "";
+          const isFormSubmitter = isSubmitButton(actionEl);
+          const clickedSubmitter = closestElement(event.target, "button,input");
+          const clickedForm = clickedSubmitter && clickedSubmitter.form ? clickedSubmitter.form : null;
+          const clickedIsSubmitter = isSubmitButton(clickedSubmitter);
+          const clickedAction = clickedSubmitter && clickedSubmitter.getAttribute
+            ? clickedSubmitter.getAttribute("data-strix-action")
+            : "";
+          const clickedFormAction = clickedForm && clickedForm.getAttribute
+            ? clickedForm.getAttribute("data-strix-action")
+            : "";
+          if (clickedIsSubmitter && isKnownStrixAction(clickedAction || clickedFormAction)) {{
+            event.preventDefault();
+            event.stopPropagation();
+            const payload = strixPayloadFromElement(clickedForm, clickedForm, clickedSubmitter);
+            dispatchStrixAction(payload);
+            return;
+          }}
+          if (actionEl && actionTag !== "form" && !isFormSubmitter) {{
+            const payload = strixPayloadFromElement(actionEl, null, null);
+            if (isKnownStrixAction(payload.action)) {{
+              event.preventDefault();
+              event.stopPropagation();
+              dispatchStrixAction(payload);
+              return;
+            }}
+          }}
+          const anchor = closestElement(event.target, "a[href]");
           if (!anchor) return;
           const href = anchor.getAttribute("href");
           if (!href) return;
@@ -1400,7 +1562,42 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
             event.stopPropagation();
           }}
         }}, true);
+        root.addEventListener("submit", (event) => {{
+          const form = event.target;
+          if (!form || !form.getAttribute) return;
+          const action = form.getAttribute("data-strix-action") || "";
+          const submitter = event.submitter || null;
+          const submitterAction = submitter && submitter.getAttribute
+            ? submitter.getAttribute("data-strix-action")
+            : "";
+          if (!isKnownStrixAction(submitterAction || action)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const payload = strixPayloadFromElement(form, form, submitter);
+          dispatchStrixAction(payload);
+        }}, true);
+        root.addEventListener("keydown", (event) => {{
+          const isEnter = event.key === "Enter" || event.code === "Enter";
+          if (!isEnter || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          const field = closestElement(event.target, "input,select,textarea");
+          if (!field || !field.form || !field.tagName) return;
+          if (field.tagName.toLowerCase() === "textarea") return;
+          const action = field.form.getAttribute("data-strix-action") || "";
+          if (!isKnownStrixAction(action)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const payload = strixPayloadFromElement(field.form, field.form, null);
+          dispatchStrixAction(payload);
+        }}, true);
       }}
+
+      window.addEventListener("message", (event) => {{
+        if (event.origin !== window.location.origin) return;
+        const payload = event.data;
+        if (!payload || typeof payload !== "object" || payload.strix !== "v1") return;
+        if (!isKnownStrixAction(payload.action)) return;
+        dispatchStrixAction(payload);
+      }});
 
       function renderUiPlugins(plugins) {{
         const names = new Set((plugins || []).map((plugin) => plugin.name));
@@ -1940,7 +2137,7 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
                   }}
                 }}
                 if (doc) {{
-                  attachUiPluginLinkInterceptor(doc);
+                  attachStrixHtmlActions(doc);
                 }}
               }} catch (e) {{
                 // Sandbox or older browser without ResizeObserver / accessor: keep single measurement.
@@ -2140,25 +2337,13 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         void requestNotificationPermission();
 
         sendEl.disabled = true;
-        const body = new FormData();
-        body.set("text", textEl.value);
-        files.forEach((file) => body.append("files", file));
         try {{
-          const response = await fetch("/api/messages", {{
-            method: "POST",
-            body,
-          }});
-          if (!response.ok) {{
-            const payload = await response.json().catch(() => ({{ error: response.statusText }}));
-            throw new Error(payload.error || "message send failed");
-          }}
+          await postWebChatMessage(textEl.value, files);
           textEl.value = "";
           textEl.style.height = "auto";
           filesEl.value = "";
           pastedFiles = [];
           updateFileList();
-          isNearBottom = true;
-          await refresh();
         }} catch (error) {{
           console.error(error);
           alert(error instanceof Error ? error.message : "Failed to send message");

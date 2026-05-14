@@ -271,7 +271,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_timeout",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 timeout_seconds=hook.timeout_seconds,
             )
             try:
@@ -283,7 +283,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_exec_error",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 error=str(exc),
             )
             return event
@@ -293,7 +293,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_stderr",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 stderr=stderr_text[:2000],
             )
 
@@ -301,7 +301,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_nonzero_exit",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 returncode=proc.returncode,
             )
             return event
@@ -316,7 +316,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_invalid_output",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 error=str(exc),
                 output=stdout_text[:500],
             )
@@ -326,7 +326,7 @@ class HookManager:
             self.strix.log_event(
                 "hook_invalid_output",
                 name=hook.name,
-                event_type=event.get("type"),
+                hook_event_type=event.get("type"),
                 error="hook stdout must be a JSON object",
                 output=stdout_text[:500],
             )

@@ -221,6 +221,47 @@ async def test_empty_hook_output_is_noop(tmp_home: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_hook_stderr_logs_without_colliding_with_event_type(tmp_home: Path) -> None:
+    skill_dir = tmp_home / "skills" / "stderr"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "hook.py").write_text(
+        "import json, sys\n"
+        "event = json.loads(sys.stdin.readline())\n"
+        "print('minor hook warning', file=sys.stderr)\n"
+        "print(json.dumps(event))\n",
+        encoding="utf-8",
+    )
+    write_hooks_json(
+        skill_dir,
+        {
+            "hooks": [
+                {
+                    "name": "stderr-hook",
+                    "command": python_command("hook.py"),
+                    "events": ["pre_prompt"],
+                },
+            ],
+        },
+    )
+
+    app = FakeApp(tmp_home)
+    manager = HookManager(app)
+    manager.discover()
+
+    result = await manager.run_event("pre_prompt", {"prompt": "hello"})
+
+    assert result["prompt"] == "hello"
+    assert app.events == [
+        {
+            "type": "hook_stderr",
+            "name": "stderr-hook",
+            "hook_event_type": "pre_prompt",
+            "stderr": "minor hook warning",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_include_conversation_is_opt_in(tmp_home: Path) -> None:
     skill_dir = tmp_home / "skills" / "conversation"
     skill_dir.mkdir(parents=True)
