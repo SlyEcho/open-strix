@@ -1,11 +1,13 @@
 # HTML action API
 
-HTML messages are static: the iframe sandbox does not allow scripts. They can
-still ask the parent web UI to perform a small set of controlled actions by
-using `data-strix-action` attributes. The parent owns the actual state change.
+HTML messages run in a sandboxed iframe with `allow-scripts allow-forms`, but
+without `allow-same-origin`. Scripts can run, forms can submit, and the frame has
+an opaque origin. The reply cannot read the parent DOM or act as same-origin app
+code.
 
-UI plugin frames can use the same verbs from JavaScript with `postMessage`.
-That is the scripted twin of the declarative HTML API.
+The harness injects a tiny bridge into every HTML message. Use
+`data-strix-action` for declarative controls, or `window.strix` / `postMessage`
+from script. The parent owns the actual state change.
 
 ---
 
@@ -106,9 +108,17 @@ list.
 
 # JavaScript bridge
 
-UI plugins and other trusted scripted frames can call the same actions with
-`window.parent.postMessage`. The message must be same-origin and include
-`strix: "v1"`.
+HTML messages get a `window.strix` helper:
+
+```js
+window.strix.navigateWidget("chainlink", "/issue/567");
+window.strix.sendMessage("Summarize chainlink issue 567 and suggest the next step.");
+window.strix.resize();
+```
+
+You can also call the same actions with `postMessage`. HTML messages have an
+opaque origin, so use `"*"` as the target origin; the parent validates the source
+iframe before doing anything.
 
 ```js
 window.parent.postMessage(
@@ -118,7 +128,7 @@ window.parent.postMessage(
     widget: "chainlink",
     path: "/issue/567",
   },
-  window.location.origin,
+  "*",
 );
 ```
 
@@ -129,9 +139,12 @@ window.parent.postMessage(
     action: "chat.send",
     message: "Summarize chainlink issue 567 and suggest the next step.",
   },
-  window.location.origin,
+  "*",
 );
 ```
+
+UI plugin frames are same-origin trusted app surfaces and can use
+`window.location.origin` as the target origin if they prefer.
 
 The bridge is fire-and-forget in v1. If a plugin needs request/response
 semantics later, add an explicit `requestId` protocol rather than inferring
@@ -141,10 +154,12 @@ success from navigation or chat refresh side effects.
 
 # Security model
 
-- HTML messages still do not run scripts.
-- The parent web UI decides which actions exist and how they mutate state.
+- HTML message scripts run, but without `allow-same-origin`.
+- The injected bridge is a capability API. The parent decides which actions
+  exist and how they mutate state.
 - Unknown `data-strix-action` values are ignored.
-- `postMessage` actions are accepted only from the same origin.
+- `postMessage` actions are accepted from same-origin trusted frames or from
+  HTML message iframes the parent created.
 - `widget.navigate` only claims known UI plugin widgets.
 - `chat.send` goes through the same `/api/messages` path as the composer.
 

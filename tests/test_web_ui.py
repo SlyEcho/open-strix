@@ -309,12 +309,14 @@ def test_web_ui_renders_html_in_iframe(tmp_path: Path) -> None:
 
     assert 'if (message.format === "html")' in page
     assert 'document.createElement("iframe")' in page
-    assert 'frame.setAttribute("sandbox", "allow-same-origin");' in page
-    assert 'frame.setAttribute("srcdoc", message.content || "");' in page
+    assert 'frame.setAttribute("sandbox", "allow-scripts allow-forms");' in page
+    assert "function htmlWithBridge(" in page
+    assert "function htmlMessageBridgeSource(" in page
+    assert 'frame.setAttribute("srcdoc", htmlWithBridge(message.content || ""));' in page
     html_message_start = page.index('if (message.format === "html")')
     html_message_end = page.index("body.appendChild(frame);", html_message_start)
     html_message_block = page[html_message_start:html_message_end]
-    assert "allow-scripts" not in html_message_block
+    assert "allow-same-origin" not in html_message_block
 
 
 def test_web_ui_page_includes_ui_plugin_shell(tmp_path: Path) -> None:
@@ -592,9 +594,10 @@ def test_render_page_includes_ui_plugin_link_navigation(tmp_path: Path) -> None:
     assert "function runStrixAction(" in html
     assert "function postWebChatMessage(" in html
 
-    # Two attach paths: parent chat container, and inside HTML message iframes.
+    # Two action paths: parent chat container and injected HTML-message bridge.
     assert "attachStrixHtmlActions(messagesEl)" in html
-    assert "attachStrixHtmlActions(doc)" in html
+    assert "registerHtmlMessageFrame(frame)" in html
+    assert "htmlMessageBridgeSource" in html
 
     # Explicit HTML and JS action APIs.
     assert "data-strix-action" in html

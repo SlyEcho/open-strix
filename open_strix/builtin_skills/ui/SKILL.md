@@ -10,7 +10,7 @@ There are **three** surfaces in the local web UI. Pick by asking *what shape the
 | Surface | When | What it gives you | What it costs |
 | --- | --- | --- | --- |
 | **Markdown message** | Quick reply, single point, conversational. | Cheap, scrollable with the chat. | Linear — every reply pushes older ones up. |
-| **HTML message** | One-off rich artifact: a table, a status card, a small dashboard, a diagram, a labelled diff. The shape is non-linear but the lifetime is "until the next message scrolls it away." | Tables, grids, layered SVG, color/typography under your control. Renders inline in chat. Can use parent-owned `data-strix-action` hooks for links and forms. | No scripts, no live data. Cream background — see below. |
+| **HTML message** | One-off rich artifact: a table, a status card, a small dashboard, a diagram, a labelled diff. The shape is non-linear but the lifetime is "until the next message scrolls it away." | Tables, grids, layered SVG, color/typography, and small scripts under your control. Renders inline in chat. Can use parent-owned `data-strix-action` hooks or `window.strix`. | Ephemeral; sandboxed with no same-origin access. Cream background — see below. |
 | **UI plugin** | A *frame of mind* that is not linear like chat. Persistent. Tim wants to see what we're talking about, not just discuss it. Example: chainlink issues — the chat thread talks *about* them, the plugin *shows* them, with detail views, filters, status. | A live, interactive, scrollable side panel that survives across turns. Full JS, can poll, can show fresh state. | Costs a server. Has a contract: see `ui-plugins.md`. |
 
 **Mental model (from Tim, 2026-05-12):**
@@ -46,17 +46,17 @@ Two safe strategies:
 
 **Do not:** assume a dark canvas. Light text on the default cream is unreadable. If you catch yourself writing `color: white` or `color: #eee` on the default surface, you have a bug.
 
-## No scripts
+## Script sandbox
 
-The iframe sandbox is `allow-same-origin` only — **no `allow-scripts`**. Anything that needs JS won't run. Use static HTML, CSS, and inline SVG.
+HTML messages use `sandbox="allow-scripts allow-forms"` — scripts and forms work, but the frame has an opaque origin. Do **not** assume same-origin access. The reply cannot read the parent DOM, and the parent cannot inspect the reply DOM after load.
 
-For parent-owned interactions, use the HTML action API in `html-actions.md`. It lets static HTML links, buttons, and forms ask the parent app to do controlled things like navigate a widget or send a chat message.
+For parent-owned interactions, use the HTML action API in `html-actions.md`. The harness injects a tiny bridge that lets links, buttons, forms, and scripts ask the parent app to do controlled things like navigate a widget or send a chat message.
 
-If you need arbitrary client-side state, polling, live updates, or custom JS behavior, build a UI plugin.
+If the interaction should persist across turns or act as a reusable app surface, build a UI plugin.
 
 ## Sizing
 
-The harness auto-resizes the iframe height to fit content via `ResizeObserver`. Do *not* try to fix a height. Width is capped at `min(42rem, 92%)`.
+The harness injects a `ResizeObserver` bridge that posts height updates to the parent. Do *not* try to fix a height. Width is capped at `min(42rem, 92%)`. If your script changes layout in an unusual way, call `window.strix.resize()`.
 
 ---
 
@@ -71,7 +71,7 @@ For explicit buttons/forms and the JavaScript `postMessage` bridge, read `html-a
 | From | href format | Mechanism |
 | --- | --- | --- |
 | Markdown message | `/ui/<plugin>/<path>` | Delegated click handler on the chat container. Parent intercepts and sets the plugin iframe's `src`. |
-| HTML message (sandboxed, no scripts) | Prefer `/ui/<plugin>/<path>`; the parent attaches a click listener to the iframe's `contentDocument` and routes it. Explicit buttons can use `data-strix-action="widget.navigate"`. `#/ui/<plugin>/<path>` with `target="_top"` is a legacy compatibility escape hatch only. | Parent-owned click delegation on `iframe.contentDocument`; optional hash routing. |
+| HTML message (sandboxed, opaque origin) | Prefer `/ui/<plugin>/<path>`; the injected bridge routes it through the parent. Explicit buttons can use `data-strix-action="widget.navigate"`. `#/ui/<plugin>/<path>` with `target="_top"` is a legacy compatibility escape hatch only. | Injected bridge + parent-owned `postMessage` handling; optional hash routing. |
 
 `<plugin>` must match the `name` field in the plugin's `ui.json`. `<path>` is whatever route the plugin's own server serves.
 

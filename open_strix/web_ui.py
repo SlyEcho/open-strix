@@ -1125,6 +1125,7 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
       let shellJobOutputState = new Map();
       let pastedFiles = [];
       let uiWidgets = new Map();
+      let htmlMessageFrames = new Map();
       // Route /ui/<plugin>/ links and explicit HTML actions from chat messages
       // into the parent app. The handlers close over uiWidgets dynamically, so
       // they see plugins as they register.
@@ -1402,6 +1403,12 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         return action === "widget.navigate" || action === "chat.send";
       }}
 
+      function registerHtmlMessageFrame(frame) {{
+        if (frame && frame.contentWindow) {{
+          htmlMessageFrames.set(frame.contentWindow, frame);
+        }}
+      }}
+
       function firstStringFormValue(formData, names) {{
         for (const name of names) {{
           const value = formData.get(name);
@@ -1470,6 +1477,202 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
           message,
           files: formData ? formDataFiles(formData) : [],
         }};
+      }}
+
+      function htmlMessageBridgeSource() {{
+        return "(" + function () {{
+          const STRIX_VERSION = "v1";
+
+          function post(payload) {{
+            window.parent.postMessage(Object.assign({{}}, payload || {{}}, {{ strix: STRIX_VERSION }}), "*");
+          }}
+
+          function closestElement(target, selector) {{
+            if (!target) return null;
+            const element = target.closest ? target : target.parentElement;
+            return element && element.closest ? element.closest(selector) : null;
+          }}
+
+          function isSubmitButton(element) {{
+            if (!element || !element.form || !element.tagName) return false;
+            const tag = element.tagName.toLowerCase();
+            const type = element.type ? String(element.type).toLowerCase() : "";
+            return (tag === "button" || tag === "input") && (!type || type === "submit");
+          }}
+
+          function isKnownAction(action) {{
+            return action === "widget.navigate" || action === "chat.send";
+          }}
+
+          function firstStringFormValue(formData, names) {{
+            for (const name of names) {{
+              const value = formData.get(name);
+              if (typeof value === "string") return value;
+            }}
+            return "";
+          }}
+
+          function formDataFiles(formData) {{
+            const files = [];
+            formData.forEach((value) => {{
+              if (
+                value &&
+                typeof value === "object" &&
+                typeof value.name === "string" &&
+                typeof value.arrayBuffer === "function" &&
+                value.name
+              ) {{
+                files.push(value);
+              }}
+            }});
+            return files;
+          }}
+
+          function strixAttr(primary, fallback, name) {{
+            const attr = "data-strix-" + name;
+            return (
+              (primary && primary.getAttribute && primary.getAttribute(attr)) ||
+              (fallback && fallback.getAttribute && fallback.getAttribute(attr)) ||
+              ""
+            );
+          }}
+
+          function payloadFromElement(element, form, submitter) {{
+            const source = submitter || element;
+            let formData = null;
+            if (form) {{
+              formData = new FormData(form);
+              if (submitter && submitter.name) {{
+                formData.set(submitter.name, submitter.value || "");
+              }}
+            }}
+            const href = strixAttr(source, element, "href") || (element.getAttribute && element.getAttribute("href")) || "";
+            const path = strixAttr(source, element, "path") || href;
+            const message =
+              strixAttr(source, element, "message") ||
+              (formData ? firstStringFormValue(formData, ["message", "text", "prompt"]) : "");
+            return {{
+              action: strixAttr(source, element, "action"),
+              widget: strixAttr(source, element, "widget"),
+              path,
+              href,
+              message,
+              files: formData ? formDataFiles(formData) : [],
+            }};
+          }}
+
+          function routePlainUiLink(anchor) {{
+            const href = anchor && anchor.getAttribute ? anchor.getAttribute("href") : "";
+            if (!href || !href.startsWith("/ui/")) return false;
+            post({{ action: "widget.navigate", href }});
+            return true;
+          }}
+
+          function resize() {{
+            const html = document.documentElement;
+            const body = document.body;
+            const height = Math.max(
+              html ? html.scrollHeight : 0,
+              body ? body.scrollHeight : 0,
+            );
+            if (height > 0) {{
+              post({{ type: "frame.resize", height }});
+            }}
+          }}
+
+          window.strix = Object.freeze({{
+            action(payload) {{
+              post(payload || {{}});
+            }},
+            navigateWidget(widget, path) {{
+              post({{ action: "widget.navigate", widget, path }});
+            }},
+            sendMessage(message) {{
+              post({{ action: "chat.send", message }});
+            }},
+            resize,
+          }});
+
+          document.addEventListener("click", (event) => {{
+            if (event.defaultPrevented || event.button !== 0) return;
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            const actionEl = closestElement(event.target, "[data-strix-action]");
+            const actionTag = actionEl && actionEl.tagName ? actionEl.tagName.toLowerCase() : "";
+            const isFormSubmitter = isSubmitButton(actionEl);
+            const clickedSubmitter = closestElement(event.target, "button,input");
+            const clickedForm = clickedSubmitter && clickedSubmitter.form ? clickedSubmitter.form : null;
+            const clickedIsSubmitter = isSubmitButton(clickedSubmitter);
+            const clickedAction = clickedSubmitter && clickedSubmitter.getAttribute
+              ? clickedSubmitter.getAttribute("data-strix-action")
+              : "";
+            const clickedFormAction = clickedForm && clickedForm.getAttribute
+              ? clickedForm.getAttribute("data-strix-action")
+              : "";
+            if (clickedIsSubmitter && isKnownAction(clickedAction || clickedFormAction)) {{
+              event.preventDefault();
+              event.stopPropagation();
+              post(payloadFromElement(clickedForm, clickedForm, clickedSubmitter));
+              return;
+            }}
+            if (actionEl && actionTag !== "form" && !isFormSubmitter) {{
+              const payload = payloadFromElement(actionEl, null, null);
+              if (isKnownAction(payload.action)) {{
+                event.preventDefault();
+                event.stopPropagation();
+                post(payload);
+                return;
+              }}
+            }}
+            const anchor = closestElement(event.target, "a[href]");
+            if (routePlainUiLink(anchor)) {{
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          }}, true);
+
+          document.addEventListener("submit", (event) => {{
+            const form = event.target;
+            if (!form || !form.getAttribute) return;
+            const action = form.getAttribute("data-strix-action") || "";
+            const submitter = event.submitter || null;
+            const submitterAction = submitter && submitter.getAttribute
+              ? submitter.getAttribute("data-strix-action")
+              : "";
+            if (!isKnownAction(submitterAction || action)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            post(payloadFromElement(form, form, submitter));
+          }}, true);
+
+          document.addEventListener("keydown", (event) => {{
+            const isEnter = event.key === "Enter" || event.code === "Enter";
+            if (!isEnter || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            const field = closestElement(event.target, "input,select,textarea");
+            if (!field || !field.form || !field.tagName) return;
+            if (field.tagName.toLowerCase() === "textarea") return;
+            const action = field.form.getAttribute("data-strix-action") || "";
+            if (!isKnownAction(action)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            post(payloadFromElement(field.form, field.form, null));
+          }}, true);
+
+          window.addEventListener("load", resize);
+          if (typeof ResizeObserver !== "undefined") {{
+            const observer = new ResizeObserver(() => resize());
+            observer.observe(document.documentElement);
+            if (document.body) observer.observe(document.body);
+          }}
+          window.setTimeout(resize, 0);
+        }}.toString() + ")();";
+      }}
+
+      function htmlWithBridge(html) {{
+        const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+        const script = doc.createElement("script");
+        script.textContent = htmlMessageBridgeSource();
+        doc.body.appendChild(script);
+        return "<!doctype html>" + doc.documentElement.outerHTML;
       }}
 
       async function postWebChatMessage(text, files = []) {{
@@ -1592,9 +1795,19 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
       }}
 
       window.addEventListener("message", (event) => {{
-        if (event.origin !== window.location.origin) return;
         const payload = event.data;
-        if (!payload || typeof payload !== "object" || payload.strix !== "v1") return;
+        if (!payload || typeof payload !== "object") return;
+        const htmlFrame = htmlMessageFrames.get(event.source);
+        const isSameOriginFrame = event.origin === window.location.origin;
+        if (!htmlFrame && !isSameOriginFrame) return;
+        if (payload.strix !== "v1") return;
+        if (payload.type === "frame.resize" && htmlFrame) {{
+          const height = Number(payload.height);
+          if (Number.isFinite(height) && height > 0) {{
+            htmlFrame.style.height = Math.ceil(height) + "px";
+          }}
+          return;
+        }}
         if (!isKnownStrixAction(payload.action)) return;
         dispatchStrixAction(payload);
       }});
@@ -2104,46 +2317,16 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
           if (message.format === "html") {{
             const frame = document.createElement("iframe");
             frame.className = "html-body";
-            frame.setAttribute("sandbox", "allow-same-origin");
-            frame.setAttribute("srcdoc", message.content || "");
+            frame.setAttribute("sandbox", "allow-scripts allow-forms");
             frame.style.border = "none";
             frame.style.width = "100%";
             frame.style.minHeight = "120px";
-            const resize = () => {{
-              try {{
-                const doc = frame.contentDocument;
-                if (!doc || !doc.body) return;
-                const html = doc.documentElement;
-                const next = Math.max(
-                  html ? html.scrollHeight : 0,
-                  doc.body.scrollHeight,
-                );
-                if (next > 0) {{
-                  frame.style.height = next + "px";
-                }}
-              }} catch (e) {{
-                // Cross-origin or sandbox lockdown: keep min height.
-              }}
-            }};
             frame.addEventListener("load", () => {{
-              resize();
-              try {{
-                const doc = frame.contentDocument;
-                if (doc && doc.documentElement && typeof ResizeObserver !== "undefined") {{
-                  const ro = new ResizeObserver(() => resize());
-                  ro.observe(doc.documentElement);
-                  if (doc.body) {{
-                    ro.observe(doc.body);
-                  }}
-                }}
-                if (doc) {{
-                  attachStrixHtmlActions(doc);
-                }}
-              }} catch (e) {{
-                // Sandbox or older browser without ResizeObserver / accessor: keep single measurement.
-              }}
+              registerHtmlMessageFrame(frame);
             }});
             body.appendChild(frame);
+            registerHtmlMessageFrame(frame);
+            frame.setAttribute("srcdoc", htmlWithBridge(message.content || ""));
           }} else {{
             body.innerHTML = simpleMarkdown(message.content);
           }}
