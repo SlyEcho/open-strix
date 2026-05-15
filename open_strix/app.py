@@ -474,8 +474,20 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
                         emoji=emoji,
                     )
 
-    def _create_agent(self, extra_tools: list[Any] | None = None) -> Any:
-        """Build the LangGraph agent with all tools."""
+    def _create_agent(
+        self,
+        extra_tools: list[Any] | None = None,
+        model_override: str | None = None,
+    ) -> Any:
+        """Build the LangGraph agent with all tools.
+
+        Args:
+            extra_tools: Additional tools to register (e.g. MCP tools).
+            model_override: Provider-qualified model string to use instead of
+                ``self.config.model``.  Scheduler jobs that set ``model:`` in
+                ``scheduler.yaml`` use this to route low-cost tasks to a
+                cheaper model class.
+        """
         mutable_backend = LoggingWriteGuardBackend(
             root_dir=self.home,
             writable_dirs=self.config.writable_dirs,
@@ -487,7 +499,8 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
             default=mutable_backend,
             routes={BUILTIN_SKILLS_ROUTE: builtin_backend},
         )
-        model_name = _model_for_deep_agents(self.config.model)
+        raw_model = model_override if model_override else self.config.model
+        model_name = _model_for_deep_agents(raw_model)
         model = _build_chat_model(
             model_name,
             max_retries=self.config.model_max_retries,
@@ -940,6 +953,16 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
                 errors.append(f"{path.name}: expected a YAML mapping, got {type(loaded).__name__}")
         return errors
 
+    def _get_agent_for_scheduler_model(self, model_name: str) -> Any:
+        """Build a fresh agent for a per-job model override.
+
+        A new agent is built on each scheduler firing — build cost is a few ms
+        and is acceptable for jobs that fire no faster than once per minute.
+        Caching is intentionally omitted: open-strix does not cache as a rule
+        and the precedent cost of an idiom-of-one cache exceeds the build savings.
+        """
+        return self._create_agent(model_override=model_name)
+
     async def _process_event(self, event: AgentEvent) -> None:
         self._current_turn_sent_messages = []
         self._reset_send_message_circuit_breaker()
@@ -1002,8 +1025,15 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
                 if event.continuation_messages
                 else [HumanMessage(content=prompt)]
             )
+            agent = (
+                self._get_agent_for_scheduler_model(
+                    _model_for_deep_agents(event.scheduler_model)
+                )
+                if event.scheduler_model
+                else self.agent
+            )
             async with self._typing_indicator(event):
-                result = await self.agent.ainvoke({"messages": agent_messages})
+                result = await agent.ainvoke({"messages": agent_messages})
             timings["agent_invoke_seconds"] = time.monotonic() - invoke_start
             self._log_agent_trace(result)
             self._write_session_log(event, prompt, result)
@@ -1056,7 +1086,7 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
                 )
                 repair_start = time.monotonic()
                 async with self._typing_indicator(event):
-                    result = await self.agent.ainvoke(
+                    result = await agent.ainvoke(
                         {"messages": [HumanMessage(content=repair_prompt)]}
                     )
                 timings["block_repair_invoke_seconds"] = time.monotonic() - repair_start
