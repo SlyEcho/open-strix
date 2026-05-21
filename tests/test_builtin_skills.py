@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from datetime import date
+from importlib.resources.abc import Traversable
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+from open_strix import builtin_skills
 from open_strix.builtin_skills import materialize_builtin_skills, sync_builtin_skills_home
 from open_strix.config import RepoLayout, STATE_DIR_NAME, bootstrap_home_repo
+
+
+def test_builtin_skills_use_resources_traversable() -> None:
+    assert builtin_skills.Traversable is Traversable
 
 
 def test_materialized_builtin_skills_include_prediction_review_assets() -> None:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from importlib.abc import Traversable
 from importlib import resources
+from importlib.resources.abc import Traversable
 import json
 from pathlib import Path
 import shutil
