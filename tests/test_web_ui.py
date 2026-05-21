@@ -85,6 +85,17 @@ def test_web_ui_page_includes_markdown_assets_and_styles(tmp_path: Path) -> None
     assert 'prefers-color-scheme: dark' in page
 
 
+def test_web_ui_exposes_theme_to_html_messages(tmp_path: Path) -> None:
+    strix = DummyStrix(tmp_path / "atlas")
+    page = _render_web_ui_page(strix)
+
+    assert '--html-surface-bg' in page
+    assert 'data-html-surface' in page
+    assert 'function getHtmlSurfaceTheme()' in page
+    assert 'type: "strix:theme"' in page
+    assert 'syncHtmlMessageTheme();' in page
+
+
 def test_web_ui_page_refresh_updates_existing_message_reactions_without_replacing_nodes(tmp_path: Path) -> None:
     strix = DummyStrix(tmp_path / "atlas")
 

@@ -35,16 +35,17 @@ Bias toward richer surfaces, not less. A markdown wall-of-bullets where an HTML 
 
 HTML messages render inside a sandboxed iframe in the local web UI. They will be *rejected* by Discord — for Discord, fall back to markdown.
 
-## The cream background
+## The chat surface
 
-**The chat surface is light (warm cream).** The agent message bubble background is approximately `rgba(255, 250, 241, 0.84)` over a `#efe4cf → #f7f2e7` page gradient. The iframe itself is **transparent** — your HTML renders directly on top of that cream/off-white surface.
+**The chat surface can be light or dark.** HTML message iframes are **transparent** over the current agent-message surface: approximately `rgba(255, 250, 241, 0.84)` in light mode and `rgba(23, 33, 43, 0.9)` in dark mode.
 
-Two safe strategies:
+Safe strategies:
 
-1. **Inherit the cream.** Use dark text (e.g. `#1a1a2e`, `#222`, dark grays) and leave the body background unset. Lightweight, blends with the chat.
+1. **Be theme-independent.** Use explicit foreground/background contrast that works in both light and dark themes.
 2. **Paint your own opaque background.** Set `html, body { background: <your color>; }` full-bleed (not just on a card) so contrast is fully under your control. Use this for dashboards, dark-mode mock-ups, or anything image-y.
+3. **Adapt scripted HTML.** If scripts are enabled, listen for `window.message` events of type `strix:theme` with `{ theme, background, text, muted, accent }` and adjust your CSS variables when the user switches theme.
 
-**Do not:** assume a dark canvas. Light text on the default cream is unreadable. If you catch yourself writing `color: white` or `color: #eee` on the default surface, you have a bug.
+**Do not:** assume a fixed light or dark canvas unless you provide it yourself. Light text can disappear on light surfaces; dark text can disappear on dark surfaces.
 
 ## Script sandbox
 
