@@ -30,6 +30,64 @@ if TYPE_CHECKING:
     from .app import OpenStrixApp
 
 
+
+# ---------------------------------------------------------------------------
+# Token cost computation
+# ---------------------------------------------------------------------------
+# Pricing per 1M tokens. Cache is a multiplier on base input:
+#   read = 0.1 × base input price  (5-min TTL assumption)
+#   creation = 1.25 × base input price
+# Source: https://www.anthropic.com/pricing (checked 2026-05-25)
+_TOKEN_RATES: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_creation": 3.75,
+    },
+    "claude-opus-4-7": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_creation": 6.25,
+    },
+    "claude-haiku-4-5": {
+        "input": 1.00,
+        "output": 5.00,
+        "cache_read": 0.10,
+        "cache_creation": 1.25,
+    },
+}
+_DEFAULT_TOKEN_RATES = _TOKEN_RATES["claude-sonnet-4-6"]
+
+
+def _turn_cost_usd(event: dict[str, Any]) -> float:
+    """Compute cost in USD for one ``llm_usage`` event.
+
+    LangChain convention: ``input_tokens`` is inclusive of both cache buckets,
+    so ``fresh_input = input_tokens - cache_read - cache_creation``.
+
+    Unknown models are priced as Sonnet (the default) rather than silently
+    inflating a known-model bucket.  In practice the model field is always set,
+    so this is a safety net, not a common path.
+    """
+    raw_model = (event.get("model") or "").split(":")[-1] or "claude-sonnet-4-6"
+    unknown = raw_model not in _TOKEN_RATES
+    model = raw_model if not unknown else "claude-sonnet-4-6"
+    rates = _TOKEN_RATES[model]
+    total_input: int = event.get("input_tokens", 0)
+    cache_read: int = event.get("cache_read_input_tokens", 0)
+    cache_creation: int = event.get("cache_creation_input_tokens", 0)
+    output: int = event.get("output_tokens", 0)
+    fresh_input = max(0, total_input - cache_read - cache_creation)
+    return (
+        fresh_input * rates["input"]
+        + cache_read * rates["cache_read"]
+        + cache_creation * rates["cache_creation"]
+        + output * rates["output"]
+    ) / 1_000_000
+
+
 def _parse_ts(text: str) -> datetime | None:
     if not text:
         return None
@@ -96,6 +154,7 @@ def compute_stats(events: list[dict[str, Any]], days: int) -> dict[str, Any]:
     turn_invoke_seconds: list[float] = []
     tool_calls_in_session: defaultdict[str, int] = defaultdict(int)
     session_id_seen: set[str] = set()
+    llu_items: list[dict[str, Any]] = []
 
     recent_failures: list[dict[str, Any]] = []
     failure_event_kinds = {
@@ -144,6 +203,17 @@ def compute_stats(events: list[dict[str, Any]], days: int) -> dict[str, Any]:
                 turn_total_seconds.append(float(total))
             if isinstance(invoke, (int, float)):
                 turn_invoke_seconds.append(float(invoke))
+        elif kind == "llm_usage":
+            sid = record.get("session_id")
+            cost = _turn_cost_usd(record)
+            llu_items.append({
+                "sid": sid or "",
+                "ts": record["_ts"],
+                "cost": cost,
+                "input_tokens": record.get("input_tokens", 0),
+                "cache_read": record.get("cache_read_input_tokens", 0),
+                "model": record.get("model") or "claude-sonnet-4-6",
+            })
 
         if kind in failure_event_kinds:
             failures_by_kind[kind] += 1
@@ -162,6 +232,9 @@ def compute_stats(events: list[dict[str, Any]], days: int) -> dict[str, Any]:
                 })
 
     recent_failures.sort(key=lambda x: x["t"], reverse=True)
+
+    # Cost stats from llm_usage events
+    cost_stats = _compute_cost_stats(llu_items, session_id_seen, events)
 
     days_axis = sorted(set(list(invokes_by_day.keys()) + list(queued_by_day.keys())))
     timeseries = [
@@ -210,6 +283,121 @@ def compute_stats(events: list[dict[str, Any]], days: int) -> dict[str, Any]:
         "timeseries": timeseries,
         "recent_failures": recent_failures,
         "backlog": _backlog_items(),
+        "cost": cost_stats,
+    }
+
+
+def _compute_cost_stats(
+    llu_items: list[dict[str, Any]],
+    session_ids_with_invokes: set[str],
+    all_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate cost from collected llm_usage items.
+
+    Join strategy: session_id match + most-recent agent_invoke_start before
+    each llm_usage timestamp → yields scheduler_name / source_event_type.
+
+    Note: ``model`` in llm_usage reflects ``config.model`` (the configured
+    model), not the routed model. Subagent turns may appear under the primary
+    model until upstream fix in open-strix app.py is merged.
+    """
+    if not llu_items:
+        return {
+            "total_cost_usd": 0.0,
+            "total_turns": 0,
+            "total_input_tokens": 0,
+            "cache_hit_pct": 0.0,
+            "per_job": [],
+            "daily": [],
+        }
+
+    # Build session → sorted list of (ts, job_name) from agent_invoke_start
+    session_invokes: dict[str, list[tuple[datetime, str]]] = defaultdict(list)
+    for ev in all_events:
+        if ev.get("type") != "agent_invoke_start":
+            continue
+        sid = ev.get("session_id")
+        ts = ev.get("_ts")
+        if not sid or not ts:
+            continue
+        job = ev.get("scheduler_name") or ev.get("source_event_type") or "unknown"
+        session_invokes[sid].append((ts, job))
+    for sid in session_invokes:
+        session_invokes[sid].sort(key=lambda x: x[0])
+
+    # All invokes flattened for cross-session fallback
+    all_invokes_flat = [(ts, job) for items in session_invokes.values() for ts, job in items]
+    all_invokes_flat.sort(key=lambda x: x[0])
+
+    def _job_for(item: dict[str, Any]) -> str:
+        sid, ts = item["sid"], item["ts"]
+        candidates = session_invokes.get(sid, [])
+        best_job = None
+        best_ts = None
+        for inv_ts, job in candidates:
+            if inv_ts <= ts:
+                if best_ts is None or inv_ts > best_ts:
+                    best_ts, best_job = inv_ts, job
+        if best_job:
+            return best_job
+        # Cross-session fallback: closest invoke by timestamp
+        if all_invokes_flat:
+            _, job = min(all_invokes_flat, key=lambda x: abs((x[0] - ts).total_seconds()))
+            return job
+        return "unknown"
+
+    job_stats: dict[str, dict[str, Any]] = {}
+    daily_stats: dict[str, float] = {}
+    total_cost = 0.0
+    total_input = 0
+    total_cache_read = 0
+
+    for item in llu_items:
+        job = _job_for(item)
+        cost = item["cost"]
+        inp = item["input_tokens"]
+        cr = item["cache_read"]
+        day = item["ts"].strftime("%Y-%m-%d")
+
+        total_cost += cost
+        total_input += inp
+        total_cache_read += cr
+        daily_stats[day] = round(daily_stats.get(day, 0.0) + cost, 6)
+
+        if job not in job_stats:
+            job_stats[job] = {"cost_usd": 0.0, "turns": 0, "input_tokens": 0, "cache_read": 0}
+        s = job_stats[job]
+        s["cost_usd"] = round(s["cost_usd"] + cost, 6)
+        s["turns"] += 1
+        s["input_tokens"] += inp
+        s["cache_read"] += cr
+
+    per_job = []
+    for job, s in sorted(job_stats.items(), key=lambda x: -x[1]["cost_usd"]):
+        inp = s["input_tokens"]
+        cache_pct = round(100 * s["cache_read"] / inp, 1) if inp else 0.0
+        per_job.append({
+            "job": job,
+            "cost_usd": round(s["cost_usd"], 4),
+            "turns": s["turns"],
+            "input_tokens": inp,
+            "cache_hit_pct": cache_pct,
+        })
+
+    daily = [
+        {"day": d, "cost_usd": round(v, 4)}
+        for d, v in sorted(daily_stats.items())
+    ]
+
+    cache_pct_overall = round(100 * total_cache_read / total_input, 1) if total_input else 0.0
+
+    return {
+        "total_cost_usd": round(total_cost, 4),
+        "total_turns": len(llu_items),
+        "total_input_tokens": total_input,
+        "cache_hit_pct": cache_pct_overall,
+        "per_job": per_job,
+        "daily": daily,
     }
 
 
@@ -218,7 +406,7 @@ def _backlog_items() -> list[dict[str, str]]:
         {
             "id": "token-usage",
             "title": "Token usage by source / over time",
-            "status": "Instrumented — llm_usage event emitted per agent.ainvoke",
+            "status": "Implemented — Cost tab added to /ops dashboard; uses llm_usage events with per-job breakdown and cache efficiency metrics.",
             "blocker": "",
         },
         {
@@ -376,6 +564,7 @@ _DASHBOARD_HTML = """<!doctype html>
         <button class="tab" data-panel="invocations">Invocations</button>
         <button class="tab" data-panel="tools">Tools</button>
         <button class="tab" data-panel="failures">Failures</button>
+        <button class="tab" data-panel="cost">Cost</button>
         <button class="tab" data-panel="backlog">Backlog</button>
         <button class="tab" data-panel="raw">Raw</button>
       </nav>
@@ -404,6 +593,36 @@ _DASHBOARD_HTML = """<!doctype html>
         <h3>Failures by kind</h3>
         <table id="failure-table"><thead><tr><th>Kind</th><th class="num">Count</th></tr></thead><tbody></tbody></table>
         <details open><summary>Recent failures (up to 30)</summary><pre id="recent-failures"></pre></details>
+      </section>
+
+      <section id="cost" class="panel">
+        <h2>Cost by Job</h2>
+        <p style="color:var(--muted);font-size:0.85rem">
+          Pricing: Sonnet&nbsp;4.6 $3/$15/M&nbsp;in/out, cache read $0.30/M, creation $3.75/M.
+          Cache is ~0.1× / 1.25× of base input price (5-min TTL).
+          <br><strong>Note:</strong> <code>model</code> field reflects the configured model, not the routed model.
+          Subagent&nbsp;(Opus/Haiku) costs may appear under the primary model until <code>app.py:1152</code> is patched upstream.
+        </p>
+        <table id="cost-table">
+          <thead>
+            <tr>
+              <th>Job / Source</th>
+              <th class="num">Cost (USD)</th>
+              <th class="num">Share</th>
+              <th class="num">Turns</th>
+              <th class="num">Input tokens</th>
+              <th class="num">Cache hit %</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h2 style="margin-top:1.5rem">Daily Cost</h2>
+        <canvas id="cost-chart" height="160"></canvas>
+        <div style="margin-top:1rem;font-size:0.85rem;color:var(--muted)">
+          Total window cost: <strong id="total-cost-display">—</strong>
+          &nbsp;·&nbsp; Overall cache hit: <strong id="cache-hit-display">—</strong>
+          &nbsp;·&nbsp; Turns with llm_usage: <strong id="llm-turns-display">—</strong>
+        </div>
       </section>
 
       <section id="backlog" class="panel">
@@ -528,6 +747,53 @@ _DASHBOARD_HTML = """<!doctype html>
         data: { labels: toolNames, datasets: [{ label: 'Calls', data: toolValues, backgroundColor: accent }] },
         options: { indexAxis: 'y', plugins: { title: { display: true, text: 'Top tools' }, legend: { display: false } } }
       });
+
+      // Cost tab
+      const costData = D.cost || {};
+      if (costData.per_job && costData.per_job.length > 0) {
+        document.getElementById('total-cost-display').textContent = '$' + (costData.total_cost_usd || 0).toFixed(4);
+        document.getElementById('cache-hit-display').textContent = (costData.cache_hit_pct || 0) + '%';
+        document.getElementById('llm-turns-display').textContent = costData.total_turns || 0;
+
+        const tbody = document.querySelector('#cost-table tbody');
+        const total = costData.total_cost_usd || 1;
+        for (const row of costData.per_job) {
+          const pct = total > 0 ? (row.cost_usd / total * 100).toFixed(1) : '0.0';
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td>' + row.job + '</td>' +
+            '<td class="num"><strong>$' + row.cost_usd.toFixed(4) + '</strong></td>' +
+            '<td class="num" style="color:var(--muted)">' + pct + '%</td>' +
+            '<td class="num">' + row.turns + '</td>' +
+            '<td class="num">' + row.input_tokens.toLocaleString() + '</td>' +
+            '<td class="num">' + row.cache_hit_pct + '%</td>';
+          tbody.appendChild(tr);
+        }
+        // Total row
+        const totalTr = document.createElement('tr');
+        totalTr.style.fontWeight = '600';
+        totalTr.style.borderTop = '2px solid var(--line)';
+        totalTr.innerHTML =
+          '<td>TOTAL</td>' +
+          '<td class="num">$' + (costData.total_cost_usd || 0).toFixed(4) + '</td>' +
+          '<td class="num">100%</td>' +
+          '<td class="num">' + (costData.total_turns || 0) + '</td>' +
+          '<td class="num">' + (costData.total_input_tokens || 0).toLocaleString() + '</td>' +
+          '<td class="num">—</td>';
+        tbody.appendChild(totalTr);
+
+        // Daily cost chart
+        if (costData.daily && costData.daily.length > 0) {
+          const costDays = costData.daily.map(x => x.day.slice(5));
+          const costVals = costData.daily.map(x => x.cost_usd);
+          new Chart(document.getElementById('cost-chart'), {
+            type: 'bar',
+            data: { labels: costDays, datasets: [{ label: 'Cost (USD)', data: costVals, backgroundColor: warn }] },
+            options: { plugins: { title: { display: true, text: 'Daily API cost (USD)' }, legend: { display: false } } }
+          });
+        }
+      }
+
     </script>
   </body>
 </html>

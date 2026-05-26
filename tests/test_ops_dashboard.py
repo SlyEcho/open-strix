@@ -373,3 +373,108 @@ def test_load_events_reads_multiple_siblings_in_order(tmp_path: Path) -> None:
     types = {e["type"] for e in result}
     assert "tool_call" in types
     assert "agent_invoke_start" in types
+
+
+# --- cost formula unit tests --------------------------------------------------
+
+
+def test_turn_cost_usd_sonnet_cache_aware() -> None:
+    """$0.5715 worked example: 1M input, 900K cache-read, 0 cache-creation, 100 output tokens."""
+    from open_strix.ops_dashboard import _turn_cost_usd
+
+    ev = {
+        "model": "claude-sonnet-4-6",
+        "input_tokens": 1_000_000,
+        "cache_read_input_tokens": 900_000,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 100,
+    }
+    # fresh_input = 1_000_000 - 900_000 - 0 = 100_000
+    # cost = 100_000 * $3/M + 900_000 * $0.30/M + 0 * $3.75/M + 100 * $15/M
+    #      = $0.30 + $0.27 + $0 + $0.0015
+    #      = $0.5715
+    assert round(_turn_cost_usd(ev), 4) == 0.5715
+
+
+def test_turn_cost_usd_anthropic_prefix_stripped() -> None:
+    """model field may arrive as 'anthropic:claude-sonnet-4-6' — should price correctly."""
+    from open_strix.ops_dashboard import _turn_cost_usd
+
+    ev_prefixed = {
+        "model": "anthropic:claude-sonnet-4-6",
+        "input_tokens": 1_000_000,
+        "cache_read_input_tokens": 900_000,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 100,
+    }
+    ev_bare = dict(ev_prefixed, model="claude-sonnet-4-6")
+    assert _turn_cost_usd(ev_prefixed) == _turn_cost_usd(ev_bare)
+
+
+def test_turn_cost_usd_per_job_attribution(tmp_path: Path) -> None:
+    """Two llm_usage events paired with agent_invoke_start rows → correct per-job cost."""
+    from open_strix.ops_dashboard import _compute_cost_stats
+
+    now = datetime.now(timezone.utc)
+
+    def _ts_dt(offset_seconds: float) -> datetime:
+        return now - timedelta(seconds=offset_seconds)
+
+    # Simulate two turns: one discord_message, one rss-daily-scan
+    llu_items = [
+        {
+            "sid": "s1",
+            "ts": _ts_dt(10),
+            "cost": 0.5715,
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 1_000_000,
+            "cache_read": 900_000,
+        },
+        {
+            "sid": "s2",
+            "ts": _ts_dt(5),
+            "cost": 0.01,
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 10_000,
+            "cache_read": 5_000,
+        },
+    ]
+
+    # agent_invoke_start rows (session_id + timestamps for join)
+    session_id_seen: set[str] = {"s1", "s2"}
+
+    raw_events = [
+        {
+            "_ts": _ts_dt(11),
+            "type": "agent_invoke_start",
+            "session_id": "s1",
+            "source_event_type": "discord_message",
+            "scheduler_name": None,
+        },
+        {
+            "_ts": _ts_dt(6),
+            "type": "agent_invoke_start",
+            "session_id": "s2",
+            "source_event_type": "poller",
+            "scheduler_name": "rss-daily-scan",
+        },
+    ]
+
+    stats = _compute_cost_stats(llu_items, session_id_seen, raw_events)
+
+    assert stats is not None
+    per_job = {row["job"]: row for row in stats["per_job"]}
+    assert "discord_message" in per_job, (
+        f"Expected discord_message job, got: {list(per_job.keys())}"
+    )
+    assert "rss-daily-scan" in per_job, (
+        f"Expected rss-daily-scan job, got: {list(per_job.keys())}"
+    )
+    assert abs(per_job["discord_message"]["cost_usd"] - 0.5715) < 1e-6, (
+        f'discord_message cost mismatch: {per_job["discord_message"]["cost_usd"]}'
+    )
+    assert abs(per_job["rss-daily-scan"]["cost_usd"] - 0.01) < 1e-6, (
+        f'rss-daily-scan cost mismatch: {per_job["rss-daily-scan"]["cost_usd"]}'
+    )
+    total = stats["total_cost_usd"]
+    assert abs(total - (0.5715 + 0.01)) < 1e-6, f"Total cost mismatch: {total}"
