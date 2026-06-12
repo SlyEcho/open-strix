@@ -17,6 +17,8 @@ DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 600
 STATE_DIR_NAME = "state"
 DEFAULT_WEB_UI_HOST = "127.0.0.1"
 DEFAULT_WEB_UI_CHANNEL_ID = "local-web"
+DEFAULT_IRC_PORT = 6697
+DEFAULT_IRC_PASSWORD_ENV = "IRC_PASSWORD"
 
 DEFAULT_FOLDERS: dict[str, str] = {
     "state": "rw",
@@ -39,6 +41,9 @@ api_port: 0
 web_ui_port: 8084
 web_ui_host: 127.0.0.1
 web_ui_channel_id: local-web
+irc_server: ""
+irc_port: 6697
+irc_tls: true
 folders:
   state: rw
   skills: rw
@@ -221,6 +226,13 @@ class AppConfig:
     web_ui_port: int = 0
     web_ui_host: str = DEFAULT_WEB_UI_HOST
     web_ui_channel_id: str = DEFAULT_WEB_UI_CHANNEL_ID
+    irc_server: str = ""
+    irc_port: int = DEFAULT_IRC_PORT
+    irc_tls: bool = True
+    irc_nick: str = ""
+    irc_channels: list[str] = field(default_factory=list)
+    irc_password_env: str = DEFAULT_IRC_PASSWORD_ENV
+    irc_respond_only_when_addressed: bool = True
     folders: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_FOLDERS))
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     disable_builtin_skills: set[str] = field(default_factory=set)
@@ -255,6 +267,18 @@ def _normalize_id_list(value: Any) -> set[str]:
         }
         return normalized
     return set()
+
+
+def _normalize_str_list(value: Any) -> list[str]:
+    """Like _normalize_id_list but order-preserving (for e.g. IRC channel lists)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",")]
+        return [item for item in raw_items if item]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 def _parse_folders(raw: Any) -> dict[str, str]:
@@ -324,6 +348,16 @@ def load_config(layout: RepoLayout) -> AppConfig:
         web_ui_host=str(loaded.get("web_ui_host", DEFAULT_WEB_UI_HOST)).strip() or DEFAULT_WEB_UI_HOST,
         web_ui_channel_id=str(loaded.get("web_ui_channel_id", DEFAULT_WEB_UI_CHANNEL_ID)).strip()
         or DEFAULT_WEB_UI_CHANNEL_ID,
+        irc_server=str(loaded.get("irc_server", "") or "").strip(),
+        irc_port=int(loaded.get("irc_port", DEFAULT_IRC_PORT)),
+        irc_tls=bool(loaded.get("irc_tls", True)),
+        irc_nick=str(loaded.get("irc_nick", "") or "").strip(),
+        irc_channels=_normalize_str_list(loaded.get("irc_channels")),
+        irc_password_env=str(loaded.get("irc_password_env", DEFAULT_IRC_PASSWORD_ENV)).strip()
+        or DEFAULT_IRC_PASSWORD_ENV,
+        irc_respond_only_when_addressed=bool(
+            loaded.get("irc_respond_only_when_addressed", True)
+        ),
         folders=_parse_folders(loaded.get("folders")),
         mcp_servers=parse_mcp_server_configs(loaded.get("mcp_servers")),
         disable_builtin_skills=_normalize_id_list(loaded.get("disable_builtin_skills")),
@@ -373,6 +407,18 @@ def _ensure_config_defaults(config_file: Path) -> None:
 
     if "web_ui_channel_id" not in loaded:
         loaded["web_ui_channel_id"] = DEFAULT_WEB_UI_CHANNEL_ID
+        changed = True
+
+    if "irc_server" not in loaded:
+        loaded["irc_server"] = ""
+        changed = True
+
+    if "irc_port" not in loaded:
+        loaded["irc_port"] = DEFAULT_IRC_PORT
+        changed = True
+
+    if "irc_tls" not in loaded:
+        loaded["irc_tls"] = True
         changed = True
 
     if "git_sync_after_turn" in loaded:

@@ -5,6 +5,20 @@ All notable changes to open-strix are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **IRC transport** — the agent can join IRC networks alongside Discord and
+  the web UI. Configure via `irc_server`, `irc_port`, `irc_tls`, `irc_nick`,
+  `irc_channels`, and `irc_password_env` (SASL PLAIN with `PASS` fallback) in
+  `config.yaml`. Channel ids are namespaced `irc:#channel` / `irc:nick`. In
+  channels the agent responds only when addressed by nick (configurable via
+  `irc_respond_only_when_addressed`); queries always get a response. Replies
+  are converted from markdown to IRC formatting, line-wrapped, flood-throttled,
+  and capped per message; reactions are memory-only and attachments are sent
+  as file names.
+
 ## [0.1.43] — 2026-05-10
 
 Headline: a new `patterns` builtin skill collects the recurring failure modes

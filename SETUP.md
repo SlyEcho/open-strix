@@ -247,6 +247,35 @@ Where this is configured in open-strix:
 - Token env var name: `config.yaml` → `discord_token_env` (default `DISCORD_TOKEN`)
 - Bot allowlist: `config.yaml` → `always_respond_bot_ids`
 
+## IRC setup
+
+The agent can also join IRC networks. Enable it by setting `irc_server` in `config.yaml`:
+
+```yaml
+irc_server: irc.libera.chat
+irc_port: 6697
+irc_tls: true
+irc_nick: my-agent
+irc_channels:
+  - "#my-channel"
+```
+
+Authentication is optional. Set the `IRC_PASSWORD` env var (name configurable
+via `irc_password_env`) and the agent authenticates with SASL PLAIN, falling
+back to a server `PASS` for bouncers like ZNC.
+
+Behavior notes:
+- In channels the agent only responds when addressed by nick
+  (`my-agent: hello`); set `irc_respond_only_when_addressed: false` to respond
+  to everything, like Discord. Queries (DMs) always get a response. All channel
+  traffic is remembered in chat history either way.
+- IRC has no attachments, reactions, or message edits — attachments are sent
+  as file names, reactions are recorded in memory only, and replies are
+  converted from markdown to IRC formatting (bold/italic control codes),
+  capped at 10 lines per channel message.
+- IRC runs alongside Discord and the web UI; channel ids are namespaced as
+  `irc:#channel` and `irc:nick`.
+
 ## `config.yaml` reference
 
 ```yaml
@@ -260,6 +289,13 @@ api_port: 0
 web_ui_port: 8084
 web_ui_host: 127.0.0.1
 web_ui_channel_id: local-web
+irc_server: ""
+irc_port: 6697
+irc_tls: true
+irc_nick: ""
+irc_channels: []
+irc_password_env: IRC_PASSWORD
+irc_respond_only_when_addressed: true
 folders:
   state: rw
   skills: rw
@@ -280,6 +316,13 @@ folders:
 | `web_ui_port` | Local web chat port (default `8084`; `0` disables it) |
 | `web_ui_host` | Bind host for the web UI (default `127.0.0.1`) |
 | `web_ui_channel_id` | Synthetic channel ID used by the built-in web chat |
+| `irc_server` | IRC server hostname (empty disables IRC) |
+| `irc_port` | IRC port (default `6697`) |
+| `irc_tls` | Use TLS for the IRC connection (default `true`) |
+| `irc_nick` | IRC nick (falls back to `name`, then `open-strix`) |
+| `irc_channels` | IRC channels to join, e.g. `["#my-channel"]` |
+| `irc_password_env` | Env var name for the SASL/server password (default `IRC_PASSWORD`) |
+| `irc_respond_only_when_addressed` | Only respond in channels when addressed by nick (default `true`) |
 | `folders` | Map of folder names to access mode (`rw` or `ro`) |
 | `mcp_servers` | List of MCP server configs (see below) |
 

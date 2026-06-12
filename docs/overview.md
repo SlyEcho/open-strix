@@ -37,6 +37,10 @@ only the file name is (where the agent can read it from a file, it's been saved 
 
 The final message is generally thrown out (actually, we log it to events.jsonl)
 
+Besides Discord, two more transports share the same channel-id routing: the local web UI (channel `local-web`)
+and IRC (channels namespaced `irc:#channel` / `irc:nick`, enabled via `irc_server` in config.yaml). On IRC the
+agent responds to queries always, and in channels only when addressed by nick (configurable).
+
 # The Prompt
 The main system prompt just tells the agent how to work with the tools it has available to it, and to what end.
 The majority of the character of the agent is crafted & evolved through memory blocks (mostly) as well as files.
