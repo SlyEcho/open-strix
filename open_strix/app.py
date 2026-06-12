@@ -55,6 +55,7 @@ from .discord import (
     _chunk_discord_message,
 )
 from .hooks import HookManager
+from .irc import IrcBridge, IrcMixin
 from .models import AgentEvent
 from .prompts import DEFAULT_CHECKPOINT, SYSTEM_PROMPT, render_folders_section, render_turn_prompt
 from .readonly_backend import (
@@ -341,7 +342,7 @@ def _cleanup_old_sessions(sessions_dir: Path, retention_days: int) -> int:
     return removed
 
 
-class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
+class OpenStrixApp(DiscordMixin, IrcMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
     def __init__(self, home: Path) -> None:
         self.home = home.resolve()
         self.layout = RepoLayout(home=self.home, state_dir_name=STATE_DIR_NAME)
@@ -387,6 +388,8 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
         self.ui_plugins = UIPluginManager(self)
 
         self.discord_client: DiscordBridge | None = None
+        self.irc_bridge: IrcBridge | None = None
+        self.irc_task: asyncio.Task[Any] | None = None
         self.api_runner: Any | None = None
         self.web_ui_runner: Any | None = None
         self.worker_task: asyncio.Task[Any] | None = None
@@ -1324,6 +1327,15 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
                 port=self.config.web_ui_port,
             )
 
+        if self.config.irc_server:
+            self.irc_bridge = IrcBridge(self)
+            self.log_event(
+                "irc_connecting",
+                server=self.config.irc_server,
+                port=self.config.irc_port,
+            )
+            self.irc_task = asyncio.create_task(self.irc_bridge.run_forever())
+
         await self.hooks.run_event(
             "post_startup",
             {
@@ -1345,6 +1357,15 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
             print(
                 "No Discord token configured. Local web UI available at "
                 f"{_web_ui_url(self.config.web_ui_host, self.config.web_ui_port)}",
+                flush=True,
+            )
+            await asyncio.Event().wait()
+            return
+
+        if self.irc_task is not None:
+            print(
+                "No Discord token configured. IRC mode is active "
+                f"({self.config.irc_server}:{self.config.irc_port}).",
                 flush=True,
             )
             await asyncio.Event().wait()
@@ -1388,6 +1409,8 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
         # Close Discord to unblock run()
         if self.discord_client is not None and not self.discord_client.is_closed():
             await self.discord_client.close()
+        if self.irc_bridge is not None:
+            await self.irc_bridge.close()
 
     async def shutdown(self) -> None:
         self.log_event("app_shutdown_start")
@@ -1405,6 +1428,14 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
             await self.web_ui_runner.cleanup()
         if self.discord_client is not None and not self.discord_client.is_closed():
             await self.discord_client.close()
+        if self.irc_bridge is not None:
+            await self.irc_bridge.close()
+        if self.irc_task is not None:
+            self.irc_task.cancel()
+            try:
+                await self.irc_task
+            except asyncio.CancelledError:
+                pass
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         if self.worker_task is not None:

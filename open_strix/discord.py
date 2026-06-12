@@ -204,6 +204,13 @@ class DiscordMixin:
                 attachment_names=attachment_names,
                 format=format,
             )
+        if self.is_irc_channel(channel_id):
+            return await self._send_irc_message(
+                channel_id=channel_id,
+                text=text,
+                attachment_names=attachment_names,
+                format=format,
+            )
         return await self._send_discord_message(
             channel_id=channel_id,
             text=text,
@@ -567,6 +574,12 @@ class DiscordMixin:
     ) -> bool:
         if self.is_local_web_channel(channel_id):
             reacted = await self._react_to_web_message(
+                channel_id=channel_id,
+                message_id=message_id,
+                emoji=emoji,
+            )
+        elif self.is_irc_channel(channel_id):
+            reacted = await self._react_to_irc_message(
                 channel_id=channel_id,
                 message_id=message_id,
                 emoji=emoji,
