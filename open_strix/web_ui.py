@@ -471,6 +471,10 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         --page-bg:
           radial-gradient(circle at top left, rgba(13, 118, 110, 0.08), transparent 32rem),
           linear-gradient(180deg, #efe4cf 0%, #f7f2e7 36%, #f5efe3 100%);
+        --html-surface-bg: rgba(255, 250, 241, 0.84);
+        --html-surface-text: #1e2430;
+        --html-surface-muted: #5f6874;
+        --html-surface-accent: #0d766e;
       }}
 
       :root[data-theme="dark"] {{
@@ -495,6 +499,10 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         --page-bg:
           radial-gradient(circle at top left, rgba(79, 209, 197, 0.14), transparent 32rem),
           linear-gradient(180deg, #08111a 0%, #101820 44%, #0d141b 100%);
+        --html-surface-bg: rgba(23, 33, 43, 0.9);
+        --html-surface-text: #eef5f1;
+        --html-surface-muted: #a7b6bd;
+        --html-surface-accent: #4fd1c5;
       }}
 
       * {{
@@ -2394,6 +2402,35 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         document.documentElement.dataset.theme = nextTheme;
         localStorage.setItem("open-strix-theme", nextTheme);
         updateThemeToggleLabel();
+        syncHtmlMessageTheme();
+      }}
+
+      function getHtmlSurfaceTheme() {{
+        const styles = getComputedStyle(document.documentElement);
+        return {{
+          theme: document.documentElement.dataset.theme || "light",
+          background: styles.getPropertyValue("--html-surface-bg").trim(),
+          text: styles.getPropertyValue("--html-surface-text").trim(),
+          muted: styles.getPropertyValue("--html-surface-muted").trim(),
+          accent: styles.getPropertyValue("--html-surface-accent").trim(),
+        }};
+      }}
+
+      function applyHtmlMessageTheme(frame) {{
+        const theme = getHtmlSurfaceTheme();
+        frame.dataset.theme = theme.theme;
+        frame.dataset.surfaceBg = theme.background;
+        frame.dataset.surfaceText = theme.text;
+        frame.style.colorScheme = theme.theme;
+        try {{
+          frame.contentWindow?.postMessage({{ type: "strix:theme", ...theme }}, "*");
+        }} catch (error) {{
+          // Cross-frame messaging is best-effort for sandboxed HTML messages.
+        }}
+      }}
+
+      function syncHtmlMessageTheme() {{
+        document.querySelectorAll("iframe.html-body").forEach(applyHtmlMessageTheme);
       }}
 
       function formatTime(value) {{
@@ -2598,6 +2635,10 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
         article.className = `message ${{message.is_bot ? "agent" : "user"}}`;
         article.dataset.messageId = message.message_id;
         article.dataset.rawContent = message.content || "";
+        if (message.format === "html") {{
+          article.dataset.format = "html";
+          article.setAttribute("data-html-surface", "chat-message");
+        }}
 
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -2642,9 +2683,11 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
             frame.style.minHeight = "120px";
             frame.addEventListener("load", () => {{
               registerHtmlMessageFrame(frame);
+              applyHtmlMessageTheme(frame);
             }});
             body.appendChild(frame);
             registerHtmlMessageFrame(frame);
+            applyHtmlMessageTheme(frame);
             frame.setAttribute("srcdoc", htmlWithBridge(message.content || "", message.message_id || ""));
           }} else {{
             body.innerHTML = simpleMarkdown(message.content);
@@ -2893,6 +2936,7 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
       composerEl.addEventListener("submit", sendMessage);
       themeToggleEl.addEventListener("click", toggleTheme);
       updateThemeToggleLabel();
+      syncHtmlMessageTheme();
       document.addEventListener("visibilitychange", () => {{
         if (!document.hidden) {{
           clearUnreadState();
