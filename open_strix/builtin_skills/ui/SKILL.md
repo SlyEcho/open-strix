@@ -43,7 +43,7 @@ Safe strategies:
 
 1. **Be theme-independent.** Use explicit foreground/background contrast that works in both light and dark themes.
 2. **Paint your own opaque background.** Set `html, body { background: <your color>; }` full-bleed (not just on a card) so contrast is fully under your control. Use this for dashboards, dark-mode mock-ups, or anything image-y.
-3. **Adapt scripted HTML.** If scripts are enabled, listen for `window.message` events of type `strix:theme` with `{ theme, background, text, muted, accent }` and adjust your CSS variables when the user switches theme.
+3. **Adapt scripted HTML.** If scripts are enabled, listen for `window.message` events of type `strix:theme` with `{ theme, background, text, muted, accent }` and adjust your CSS variables when the user switches theme. The harness pushes the theme once on frame load and again on every toggle. If your listener registers asynchronously (after load), call `window.strix.requestTheme()` right after you attach it — the harness re-sends the current theme so you don't miss the initial state.
 
 **Do not:** assume a fixed light or dark canvas unless you provide it yourself. Light text can disappear on light surfaces; dark text can disappear on dark surfaces.
 

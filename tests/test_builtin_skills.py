@@ -329,10 +329,10 @@ def test_materialized_builtin_skills_include_ui_skill() -> None:
     assert plugins_path.exists()
 
     skill_text = skill_path.read_text(encoding="utf-8")
-    # Trigger description + cream background guidance.
+    # Trigger description + theme-adaptive surface guidance (light or dark).
     assert "name: ui" in skill_text
     assert "rgba(255, 250, 241, 0.84)" in skill_text
-    assert "#efe4cf" in skill_text
+    assert "rgba(23, 33, 43, 0.9)" in skill_text
     # Link-nav protocol — both shapes.
     assert "/ui/<plugin>/<path>" in skill_text
     assert "#/ui/<plugin>/<path>" in skill_text

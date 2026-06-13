@@ -153,7 +153,12 @@ window.strix.navigateWidget("chainlink", "/issue/567");
 window.strix.sendMessage("Summarize chainlink issue 567 and suggest the next step.");
 window.strix.continue("Proceed with option B.");
 window.strix.resize();
+window.strix.requestTheme(); // re-request the current theme after a late listener attaches
 ```
+
+`requestTheme()` posts a `frame.ready` signal; the parent responds by re-sending
+the current `strix:theme` message. Use it when your `strix:theme` listener is
+registered asynchronously and may have missed the one-time push on frame load.
 
 You can also call the same actions with `postMessage`. HTML messages have an
 opaque origin, so use `"*"` as the target origin; the parent validates the source

@@ -96,6 +96,18 @@ def test_web_ui_exposes_theme_to_html_messages(tmp_path: Path) -> None:
     assert 'syncHtmlMessageTheme();' in page
 
 
+def test_html_message_theme_ready_handshake(tmp_path: Path) -> None:
+    strix = DummyStrix(tmp_path / "atlas")
+    page = _render_web_ui_page(strix)
+
+    # Bridge exposes a requestTheme() helper that posts frame.ready...
+    assert 'requestTheme()' in page
+    assert 'type: "frame.ready"' in page
+    # ...and the parent replies by re-pushing the current theme to that frame.
+    assert 'payload.type === "frame.ready" && htmlFrame' in page
+    assert 'applyHtmlMessageTheme(htmlFrame)' in page
+
+
 def test_web_ui_page_refresh_updates_existing_message_reactions_without_replacing_nodes(tmp_path: Path) -> None:
     strix = DummyStrix(tmp_path / "atlas")
 

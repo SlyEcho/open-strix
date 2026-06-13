@@ -1866,6 +1866,9 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
             continue(message) {{
               post({{ action: "conversation.continue", message }});
             }},
+            requestTheme() {{
+              post({{ type: "frame.ready" }});
+            }},
             resize,
           }});
 
@@ -2111,6 +2114,12 @@ def _render_web_ui_page(strix: OpenStrixApp) -> str:
           if (Number.isFinite(height) && height > 0) {{
             htmlFrame.style.height = Math.ceil(height) + "px";
           }}
+          return;
+        }}
+        if (payload.type === "frame.ready" && htmlFrame) {{
+          // A frame that registers its strix:theme listener after load misses the
+          // initial push. It signals readiness so we re-send the current theme.
+          applyHtmlMessageTheme(htmlFrame);
           return;
         }}
         if (!isKnownStrixAction(payload.action)) return;
