@@ -498,6 +498,7 @@ class OpenStrixApp(DiscordMixin, SchedulerMixin, ToolsMixin, WebChatMixin):
         backend = CompositeBackend(
             default=mutable_backend,
             routes={BUILTIN_SKILLS_ROUTE: builtin_backend},
+            artifacts_root=str(self.layout.state_dir),
         )
         raw_model = model_override if model_override else self.config.model
         model_name = _model_for_deep_agents(raw_model)
